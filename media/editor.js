@@ -2,6 +2,7 @@
     const vscode = acquireVsCodeApi();
     let currentContent = null;
     let isReady = false;
+    let clipboard = { type: null, data: null }; // Internal clipboard for images
     
     const editor = document.getElementById('editor');
     const saveBtn = document.getElementById('save-btn');
@@ -124,10 +125,21 @@
     function handleContextMenu(event) {
         event.preventDefault();
         console.log('Context menu requested');
-        showContextMenu(event.clientX, event.clientY);
+        
+        const selection = window.getSelection();
+        const selectedElement = event.target;
+        const isImage = selectedElement.tagName === 'IMG';
+        const hasTextSelection = selection && selection.toString().trim().length > 0;
+        
+        showContextMenu(event.clientX, event.clientY, {
+            isImage,
+            hasTextSelection,
+            selectedElement,
+            selection
+        });
     }
 
-    function showContextMenu(x, y) {
+    function showContextMenu(x, y, context) {
         // Remove existing menu
         const existingMenu = document.querySelector('.context-menu');
         if (existingMenu) {
@@ -139,18 +151,98 @@
         menu.style.left = x + 'px';
         menu.style.top = y + 'px';
 
-        const insertImageItem = document.createElement('div');
-        insertImageItem.className = 'context-menu-item';
-        insertImageItem.innerHTML = '🖼️ Insert Image';
-        insertImageItem.addEventListener('click', (e) => {
-            e.preventDefault();
+        // Insert Image option
+        const insertImageItem = createMenuItem('🖼️ Insert Image', () => {
             console.log('Context menu insert image clicked');
             insertImage();
             menu.remove();
         });
-
         menu.appendChild(insertImageItem);
+
+        // Separator
+        menu.appendChild(createSeparator());
+
+        if (context.hasTextSelection) {
+            // Cut Text
+            const cutTextItem = createMenuItem('✂️ Cut', () => {
+                document.execCommand('cut');
+                updateStatus('Text cut to clipboard');
+                menu.remove();
+            });
+            menu.appendChild(cutTextItem);
+
+            // Copy Text
+            const copyTextItem = createMenuItem('📋 Copy', () => {
+                document.execCommand('copy');
+                updateStatus('Text copied to clipboard');
+                menu.remove();
+            });
+            menu.appendChild(copyTextItem);
+        }
+
+        if (context.isImage) {
+            // Copy Image
+            const copyImageItem = createMenuItem('📷 Copy Image', () => {
+                copyImage(context.selectedElement);
+                menu.remove();
+            });
+            menu.appendChild(copyImageItem);
+
+            // Cut Image
+            const cutImageItem = createMenuItem('✂️ Cut Image', () => {
+                cutImage(context.selectedElement);
+                menu.remove();
+            });
+            menu.appendChild(cutImageItem);
+
+            // Delete Image
+            const deleteImageItem = createMenuItem('🗑️ Delete Image', () => {
+                deleteImage(context.selectedElement);
+                menu.remove();
+            });
+            menu.appendChild(deleteImageItem);
+
+            // Separator
+            menu.appendChild(createSeparator());
+        }
+
+        // Paste options
+        if (clipboard.type === 'image') {
+            const pasteImageItem = createMenuItem('📷 Paste Image', () => {
+                pasteImage();
+                menu.remove();
+            });
+            menu.appendChild(pasteImageItem);
+        }
+
+        const pasteTextItem = createMenuItem('📝 Paste', () => {
+            document.execCommand('paste');
+            updateStatus('Content pasted');
+            menu.remove();
+        });
+        menu.appendChild(pasteTextItem);
+
+        // Separator
+        menu.appendChild(createSeparator());
+
+        // Select All
+        const selectAllItem = createMenuItem('🔄 Select All', () => {
+            document.execCommand('selectAll');
+            updateStatus('All content selected');
+            menu.remove();
+        });
+        menu.appendChild(selectAllItem);
+
         document.body.appendChild(menu);
+
+        // Adjust position if menu goes off screen
+        const rect = menu.getBoundingClientRect();
+        if (rect.right > window.innerWidth) {
+            menu.style.left = (x - rect.width) + 'px';
+        }
+        if (rect.bottom > window.innerHeight) {
+            menu.style.top = (y - rect.height) + 'px';
+        }
 
         // Remove menu on click outside
         setTimeout(() => {
@@ -162,6 +254,105 @@
             };
             document.addEventListener('click', removeMenu);
         }, 0);
+    }
+
+    function createMenuItem(text, onClick) {
+        const item = document.createElement('div');
+        item.className = 'context-menu-item';
+        item.innerHTML = text;
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClick();
+        });
+        return item;
+    }
+
+    function createSeparator() {
+        const separator = document.createElement('div');
+        separator.className = 'context-menu-separator';
+        separator.style.cssText = `
+            height: 1px;
+            background-color: var(--vscode-menu-separatorBackground, #454545);
+            margin: 4px 0;
+        `;
+        return separator;
+    }
+
+    function copyImage(imgElement) {
+        clipboard = {
+            type: 'image',
+            data: {
+                src: imgElement.src,
+                alt: imgElement.alt,
+                outerHTML: imgElement.outerHTML
+            }
+        };
+        updateStatus('Image copied');
+        console.log('Image copied to internal clipboard');
+    }
+
+    function cutImage(imgElement) {
+        copyImage(imgElement);
+        deleteImage(imgElement);
+        updateStatus('Image cut');
+    }
+
+    function deleteImage(imgElement) {
+        const parent = imgElement.parentElement;
+        imgElement.remove();
+        
+        // If parent paragraph is now empty, add a line break
+        if (parent && parent.tagName === 'P' && parent.innerHTML.trim() === '') {
+            parent.innerHTML = '<br>';
+        }
+        
+        updateStatus('Image deleted');
+        autoSave();
+    }
+
+    function pasteImage() {
+        if (clipboard.type === 'image' && clipboard.data) {
+            const selection = window.getSelection();
+            let range;
+            
+            if (selection.rangeCount > 0) {
+                range = selection.getRangeAt(0);
+            } else {
+                range = document.createRange();
+                range.selectNodeContents(editor);
+                range.collapse(false);
+            }
+            
+            // Create new image element
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = clipboard.data.outerHTML;
+            const newImg = tempDiv.firstChild;
+            
+            // Create paragraph wrapper
+            const p = document.createElement('p');
+            p.appendChild(newImg);
+            
+            // Insert the paragraph
+            range.deleteContents();
+            range.insertNode(p);
+            
+            // Create new paragraph after image
+            const newP = document.createElement('p');
+            newP.innerHTML = '<br>';
+            p.parentNode.insertBefore(newP, p.nextSibling);
+            
+            // Move cursor to new paragraph
+            const newRange = document.createRange();
+            newRange.selectNodeContents(newP);
+            newRange.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
+            
+            editor.focus();
+            updateStatus('Image pasted');
+            autoSave();
+        }
     }
 
     function handleKeydown(event) {
@@ -184,6 +375,47 @@
                     event.preventDefault();
                     formatText('underline');
                     break;
+                case 'x':
+                    // Handle cut for images
+                    const selection = window.getSelection();
+                    if (selection.anchorNode && selection.anchorNode.nodeType === Node.ELEMENT_NODE) {
+                        const selectedElement = selection.anchorNode.querySelector('img');
+                        if (selectedElement) {
+                            event.preventDefault();
+                            cutImage(selectedElement);
+                        }
+                    }
+                    break;
+                case 'c':
+                    // Handle copy for images
+                    const copySelection = window.getSelection();
+                    if (copySelection.anchorNode && copySelection.anchorNode.nodeType === Node.ELEMENT_NODE) {
+                        const selectedElement = copySelection.anchorNode.querySelector('img');
+                        if (selectedElement) {
+                            event.preventDefault();
+                            copyImage(selectedElement);
+                        }
+                    }
+                    break;
+                case 'v':
+                    // Handle paste for images
+                    if (clipboard.type === 'image') {
+                        event.preventDefault();
+                        pasteImage();
+                    }
+                    break;
+            }
+        }
+        
+        // Delete key for images
+        if (event.key === 'Delete' || event.key === 'Backspace') {
+            const selection = window.getSelection();
+            if (selection.anchorNode && selection.anchorNode.nodeType === Node.ELEMENT_NODE) {
+                const selectedElement = selection.anchorNode.querySelector('img');
+                if (selectedElement) {
+                    event.preventDefault();
+                    deleteImage(selectedElement);
+                }
             }
         }
     }
@@ -301,6 +533,17 @@
             img.style.height = 'auto';
             img.style.display = 'block';
             img.style.margin = '8px 0';
+            img.style.cursor = 'pointer';
+            
+            // Make image selectable for context menu operations
+            img.addEventListener('click', function(e) {
+                e.preventDefault();
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNode(this);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            });
             
             // Create a paragraph wrapper for the image
             const p = document.createElement('p');
