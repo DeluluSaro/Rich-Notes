@@ -1,0 +1,54 @@
+{
+  "name": "rich-notes",
+  "displayName": "Rich Notes",
+  "description": "Create rich-text notes with inline images in VS Code",
+  "publisher": "DeluluSaro",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onCustomEditor:richNotes.noteEditor"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "richNotes.noteEditor",
+        "displayName": "Rich Note Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.note"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "richNotes.createNote",
+        "title": "Create New Note",
+        "category": "Rich Notes"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "richNotes.createNote",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "typescript": "^4.9.4"
+  }
+}
