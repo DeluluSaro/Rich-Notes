@@ -1,1 +1,10 @@
 hsbkj.txt
+
+
+images/*
+!images/*.png
+!images/*.jpg
+!images/*.gif
+!images/*.jpeg
+!images/*.svg
+!images/*.webp

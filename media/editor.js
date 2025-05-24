@@ -285,7 +285,8 @@
             data: {
                 src: imgElement.src,
                 alt: imgElement.alt,
-                outerHTML: imgElement.outerHTML
+                outerHTML: imgElement.outerHTML,
+                relativePath: imgElement.getAttribute('data-relative-path') || extractRelativePathFromSrc(imgElement.src)
             }
         };
         updateStatus('Image copied');
@@ -324,14 +325,30 @@
                 range.collapse(false);
             }
             
-            // Create new image element
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = clipboard.data.outerHTML;
-            const newImg = tempDiv.firstChild;
+            // Create new image element with relative path
+            const img = document.createElement('img');
+            img.src = clipboard.data.relativePath || clipboard.data.src;
+            img.alt = clipboard.data.alt || '';
+            img.setAttribute('data-relative-path', clipboard.data.relativePath);
+            img.style.maxWidth = '100%';
+            img.style.height = 'auto';
+            img.style.display = 'block';
+            img.style.margin = '8px 0';
+            img.style.cursor = 'pointer';
+            
+            // Make image selectable for context menu operations
+            img.addEventListener('click', function(e) {
+                e.preventDefault();
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNode(this);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            });
             
             // Create paragraph wrapper
             const p = document.createElement('p');
-            p.appendChild(newImg);
+            p.appendChild(img);
             
             // Insert the paragraph
             range.deleteContents();
@@ -353,6 +370,12 @@
             updateStatus('Image pasted');
             autoSave();
         }
+    }
+
+    function extractRelativePathFromSrc(src) {
+        // Handle both encoded and unencoded paths
+        const match = src.match(/(?:\/|%2F)images(?:%2F|\/)([^?#]+)/i);
+        return match ? `images/${decodeURIComponent(match[1])}` : src;
     }
 
     function handleKeydown(event) {
@@ -450,17 +473,21 @@
         console.log('Saving document...');
         updateStatus('Saving...');
         
-        const content = {
-            content: editor.innerHTML,
+        // Convert all image sources to relative paths before saving
+        const content = editor.innerHTML;
+        const processedContent = convertImageSrcsToRelativePaths(content);
+        
+        const contentData = {
+            content: processedContent,
             images: extractImagePaths(),
             lastModified: new Date().toISOString()
         };
 
-        console.log('Saving content:', content);
+        console.log('Saving content:', contentData);
 
         vscode.postMessage({
             type: 'save',
-            content: content
+            content: contentData
         });
 
         // Visual feedback
@@ -476,6 +503,14 @@
         updateStatus('Saved successfully');
     }
 
+    function convertImageSrcsToRelativePaths(htmlContent) {
+        // Convert webview URIs back to relative paths for GitHub compatibility
+        return htmlContent.replace(
+            /<img([^>]*)src="[^"]*?(?:\/|%2F)images%2F([^"?]+)"([^>]*)>/g, 
+            '<img$1src="./images/$2"$3>'  // Add ./ prefix for GitHub compatibility
+        );
+    }
+
     function autoSave() {
         console.log('Auto-saving...');
         saveDocument();
@@ -487,8 +522,9 @@
         
         images.forEach((img, index) => {
             const src = img.getAttribute('src');
-            if (src) {
-                imagePaths[`image_${index}`] = src;
+            const relativePath = img.getAttribute('data-relative-path') || extractRelativePathFromSrc(src);
+            if (relativePath) {
+                imagePaths[`image_${index}`] = relativePath;
             }
         });
         
@@ -500,6 +536,21 @@
         
         if (content && content.content) {
             editor.innerHTML = content.content;
+            
+            // Update image sources to webview URIs
+            const images = editor.querySelectorAll('img');
+            images.forEach(img => {
+                const relativePath = img.getAttribute('src');
+                if (relativePath && (relativePath.startsWith('./images/') || relativePath.startsWith('images/'))) {
+                    // Store the relative path with ./ prefix
+                    const normalizedPath = relativePath.replace(/^images\//, './images/');
+                    img.setAttribute('data-relative-path', normalizedPath);
+                    // Convert to webview URI for display
+                    const uri = vscode.getState()?.webviewUri || '';
+                    const baseUri = uri.substring(0, uri.lastIndexOf('/'));
+                    img.src = `${baseUri}/${relativePath.replace('./', '')}`;
+                }
+            });
         } else if (typeof content === 'string') {
             editor.innerHTML = content;
         } else {
@@ -509,7 +560,7 @@
         updateStatus('Content loaded');
     }
 
-    function insertImageAtCursor(imageUri, imagePath) {
+    function insertImageAtCursor(imageUri, imagePath, relativePath) {
         console.log('Inserting image at cursor:', imagePath);
         
         try {
@@ -529,6 +580,9 @@
             const img = document.createElement('img');
             img.src = imageUri;
             img.alt = imagePath;
+            // Store the relative path with ./ prefix
+            const relPath = `./images/${imagePath}`;
+            img.setAttribute('data-relative-path', relPath);
             img.style.maxWidth = '100%';
             img.style.height = 'auto';
             img.style.display = 'block';
@@ -545,7 +599,7 @@
                 selection.addRange(range);
             });
             
-            // Create a paragraph wrapper for the image
+            // Create paragraph wrapper
             const p = document.createElement('p');
             p.appendChild(img);
             
@@ -553,12 +607,12 @@
             range.deleteContents();
             range.insertNode(p);
             
-            // Create a new paragraph after the image
+            // Create new paragraph after image
             const newP = document.createElement('p');
             newP.innerHTML = '<br>';
             p.parentNode.insertBefore(newP, p.nextSibling);
             
-            // Move cursor to the new paragraph
+            // Move cursor to new paragraph
             const newRange = document.createRange();
             newRange.selectNodeContents(newP);
             newRange.collapse(true);
@@ -566,51 +620,34 @@
             selection.addRange(newRange);
             
             editor.focus();
-            updateStatus('Image inserted successfully');
-            
-            // Auto-save after inserting image
-            setTimeout(() => {
-                autoSave();
-            }, 500);
-            
+            updateStatus('Image inserted');
+            autoSave();
         } catch (error) {
-            console.error('Error inserting image:', error);
+            console.error('Error inserting image at cursor:', error);
             updateStatus('Error inserting image');
         }
     }
 
-    // Listen for messages from the extension
+    // Handle messages from the extension
     window.addEventListener('message', event => {
         const message = event.data;
-        console.log('Received message:', message.type);
         
         switch (message.type) {
             case 'update':
+                currentContent = message.content;
                 if (isReady) {
-                    currentContent = message.content;
                     loadContent(message.content);
                 }
                 break;
+                
             case 'insertImage':
-                console.log('Inserting image:', message.imagePath);
-                insertImageAtCursor(message.imageUri, message.imagePath);
+                insertImageAtCursor(message.imageUri, message.imagePath, message.relativePath);
                 break;
         }
     });
 
-    // Initialize when DOM is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeEditor);
-    } else {
+    // Initialize the editor when the document is ready
+    document.addEventListener('DOMContentLoaded', () => {
         initializeEditor();
-    }
-    
-    // Handle page unload
-    window.addEventListener('beforeunload', () => {
-        if (window.saveTimeout) {
-            clearTimeout(window.saveTimeout);
-            // Force save before unload
-            saveDocument();
-        }
     });
 })();
