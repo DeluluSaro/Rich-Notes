@@ -507,7 +507,11 @@
         // Convert webview URIs back to relative paths for GitHub compatibility
         return htmlContent.replace(
             /<img([^>]*)src="[^"]*?(?:\/|%2F)images%2F([^"?]+)"([^>]*)>/g, 
-            '<img$1src="./images/$2"$3>'  // Add ./ prefix for GitHub compatibility
+            (match, prefix, filename, suffix) => {
+                const decodedFilename = decodeURIComponent(filename);
+                // Use forward slashes and relative path from note location
+                return `<img${prefix}src="../images/${decodedFilename}"${suffix}>`;
+            }
         );
     }
 
@@ -524,7 +528,9 @@
             const src = img.getAttribute('src');
             const relativePath = img.getAttribute('data-relative-path') || extractRelativePathFromSrc(src);
             if (relativePath) {
-                imagePaths[`image_${index}`] = relativePath;
+                // Ensure path starts with ../images/
+                const normalizedPath = relativePath.replace(/^\.?\/?images\//, '../images/');
+                imagePaths[`image_${index}`] = normalizedPath;
             }
         });
         
@@ -541,14 +547,16 @@
             const images = editor.querySelectorAll('img');
             images.forEach(img => {
                 const relativePath = img.getAttribute('src');
-                if (relativePath && (relativePath.startsWith('./images/') || relativePath.startsWith('images/'))) {
-                    // Store the relative path with ./ prefix
-                    const normalizedPath = relativePath.replace(/^images\//, './images/');
+                if (relativePath && (relativePath.startsWith('../images/') || relativePath.startsWith('./images/') || relativePath.startsWith('images/'))) {
+                    // Normalize the path to start with ../images/
+                    const normalizedPath = relativePath.replace(/^\.?\/?images\//, '../images/');
                     img.setAttribute('data-relative-path', normalizedPath);
+                    
                     // Convert to webview URI for display
                     const uri = vscode.getState()?.webviewUri || '';
                     const baseUri = uri.substring(0, uri.lastIndexOf('/'));
-                    img.src = `${baseUri}/${relativePath.replace('./', '')}`;
+                    const imagePath = normalizedPath.replace('../', '');
+                    img.src = `${baseUri}/${imagePath}`;
                 }
             });
         } else if (typeof content === 'string') {
@@ -580,8 +588,8 @@
             const img = document.createElement('img');
             img.src = imageUri;
             img.alt = imagePath;
-            // Store the relative path with ./ prefix
-            const relPath = `./images/${imagePath}`;
+            // Store the relative path with ../ prefix for GitHub compatibility
+            const relPath = `../images/${imagePath}`;
             img.setAttribute('data-relative-path', relPath);
             img.style.maxWidth = '100%';
             img.style.height = 'auto';
@@ -650,4 +658,18 @@
     document.addEventListener('DOMContentLoaded', () => {
         initializeEditor();
     });
+
+    // Preload content for testing
+    const initialContent = {
+        "content": "<p><img src=\"../images/image1.jpg\" alt=\"image1.jpg\" style=\"max-width: 100%; height: auto; display: block; margin: 8px 0px; cursor: pointer;\"></p>",
+        "images": {
+            "image_0": "../images/image1.jpg"
+        },
+        "lastModified": "2025-05-24T00:00:00.000Z"
+    };
+
+    // Simulate receiving initial content from the extension
+    setTimeout(() => {
+        window.postMessage({ type: 'update', content: initialContent }, '*');
+    }, 1000);
 })();
